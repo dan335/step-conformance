@@ -10,6 +10,8 @@ publish     = false
 [dependencies]
 glam        = "0.33"
 parry3d-f64 = "0.31"
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
 step-check  = { git = "https://github.com/dan335/camcraft" }
 
 # Each reader in adapters/ is its own crate, built by run.sh.

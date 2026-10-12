@@ -1,0 +1,17 @@
+# A step-conformance reader: truck's git master, not its crates.io
+# release. Standalone; not part of any workspace.
+[package]
+name    = "truck-master-reader"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# ricosjp/truck master, 2026-09-28 ("Merge branch 'cargo-upgrade-20260928'").
+# Master still calls these crates 0.4.0 and 0.3.0, the same numbers as the
+# September 2024 releases, so the rev is what tells them apart.
+truck-meshalgo = { git = "https://github.com/ricosjp/truck", rev = "88ed005249e5e3a6b07f62425399435905cd3ab6" }
+truck-stepio   = { git = "https://github.com/ricosjp/truck", rev = "88ed005249e5e3a6b07f62425399435905cd3ab6" }
+truck-topology = { git = "https://github.com/ricosjp/truck", rev = "88ed005249e5e3a6b07f62425399435905cd3ab6" }
+
+[workspace]

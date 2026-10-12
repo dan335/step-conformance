@@ -2,7 +2,8 @@
 //!
 //! ```text
 //! step-conformance --out DIR --reference NAME=PROGRAM [--reader NAME=PROGRAM[:file-units]]...
-//!     [--tolerances 0.0125,0.05,0.1,0.5] [--reference-tolerance 0.001] [--timeout 60]
+//!     [--tolerances 0.0125,0.05,0.1,0.5] [--reference-tolerance 0.001]
+//!     [--timeout 60] [--reference-timeout 600]
 //!     FILE_OR_DIR...
 //! ```
 //!
@@ -15,10 +16,14 @@
 //! Every part is read by each reader at each tolerance. The mesh is checked against
 //! the file's own facts with `step-check` (every face arrives with triangles, nothing
 //! lands outside the file's geometry, the mesh reaches every vertex), then measured
-//! in both directions against the reference reader's mesh at the far finer reference
-//! tolerance: how far its points lie from that surface, and how far that surface lies
-//! from it, which finds missing surface. A reader passes a part at a tolerance when
-//! the checks pass and neither distance exceeds four times the tolerance.
+//! in both directions against the part's true surface: how far the mesh lies from it,
+//! and how far it lies from the mesh, which finds missing surface. A generated part
+//! carries its exact shape in a `truth.json` beside it; any other part is measured
+//! against the reference reader's mesh at the far finer reference tolerance. A reader
+//! passes a part at a tolerance when the checks pass and neither distance exceeds four
+//! times the tolerance.
+
+mod truth;
 
 use std::error::Error;
 use std::path::{Path, PathBuf};
@@ -29,6 +34,7 @@ use glam::{DVec3, dvec3};
 use parry3d_f64::query::PointQuery;
 use parry3d_f64::shape::TriMesh;
 use step_check::{FileCheck, KernelMesh, Problem, part21};
+use truth::Truth;
 
 /// How far past the tolerance a reader may land and still pass. Four, because
 /// OpenCascade itself reaches 3.4 times its tolerance on `bowl_01` at 0.0125 mm.
@@ -69,6 +75,7 @@ struct Args {
     tolerances: Vec<f64>,
     reference_tolerance: f64,
     timeout: Duration,
+    reference_timeout: Duration,
     parts: Vec<PathBuf>,
 }
 
@@ -80,6 +87,7 @@ fn args() -> Result<Args, Box<dyn Error>> {
         tolerances: vec![0.0125, 0.05, 0.1, 0.5],
         reference_tolerance: 0.001,
         timeout: Duration::from_secs(60),
+        reference_timeout: Duration::from_secs(600),
         parts: Vec::new(),
     };
     let mut it = std::env::args().skip(1);
@@ -97,6 +105,7 @@ fn args() -> Result<Args, Box<dyn Error>> {
             }
             "--reference-tolerance" => a.reference_tolerance = value()?.parse()?,
             "--timeout" => a.timeout = Duration::from_secs(value()?.parse()?),
+            "--reference-timeout" => a.reference_timeout = Duration::from_secs(value()?.parse()?),
             path => {
                 let path = PathBuf::from(path);
                 if path.is_dir() {
@@ -130,16 +139,22 @@ fn main() -> Result<(), Box<dyn Error>> {
     for part in &a.parts {
         let stem = stem(part);
         let facts = part21::facts(&String::from_utf8_lossy(&std::fs::read(part)?))?;
-        let truth = match read(&reference, &a.out, a.reference_tolerance, part, &facts, a.timeout)? {
-            Ran::Meshed(mesh, _) => Surface::new(&mesh)?,
-            Ran::Refused(why) => {
-                println!("| {stem} | | the reference could not read it: {why} |");
-                continue;
+        let truth = match Truth::beside(part)? {
+            Some(exact) => {
+                let samples = exact.samples(64, 256);
+                Against::Exact(exact, samples)
             }
-            Ran::TimedOut => {
-                println!("| {stem} | | the reference timed out |");
-                continue;
-            }
+            None => match read(&reference, &a.out, a.reference_tolerance, part, &facts, a.reference_timeout)? {
+                Ran::Meshed(mesh, _) => Against::Mesh(Surface::new(&mesh)?),
+                Ran::Refused(why) => {
+                    println!("| {stem} | | the reference could not read it: {why} |");
+                    continue;
+                }
+                Ran::TimedOut => {
+                    println!("| {stem} | | the reference timed out |");
+                    continue;
+                }
+            },
         };
         for &tolerance in &a.tolerances {
             let mut cells = Vec::new();
@@ -160,8 +175,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
     println!();
-    let runs = a.parts.len() * a.tolerances.len();
     for r in &a.readers {
+        let runs = r.passed + r.failed.len();
         println!("**{}** passes {} of {runs}.", r.name, r.passed);
         for f in &r.failed {
             println!("- {f}");
@@ -175,12 +190,11 @@ fn main() -> Result<(), Box<dyn Error>> {
 fn verdict(
     facts: &part21::StepFacts,
     mesh: &KernelMesh,
-    truth: &Surface,
+    truth: &Against,
     tolerance: f64,
     took: Duration,
 ) -> Result<(String, bool), Box<dyn Error>> {
-    let surface = Surface::new(mesh)?;
-    let off = surface.farthest_from(truth).max(truth.farthest_from(&surface));
+    let off = truth.off(&Surface::new(mesh)?);
     let secs = took.as_secs_f64();
     Ok(match step_check::check(facts, mesh, tolerance) {
         Err(problem) => (format!("{}, {off:.3} mm off", short(&problem)), false),
@@ -207,6 +221,31 @@ fn one_line(s: &str) -> String {
 
 fn stem(part: &Path) -> String {
     part.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()
+}
+
+/// What a reader's mesh is measured against.
+enum Against {
+    /// The part's exact shape, and points spread over it.
+    Exact(Truth, Vec<DVec3>),
+    /// The reference reader's far finer mesh.
+    Mesh(Surface),
+}
+
+impl Against {
+    /// The worst distance either way between `mesh` and the true surface.
+    fn off(&self, mesh: &Surface) -> f64 {
+        match self {
+            Against::Exact(truth, samples) => {
+                let from = mesh.points.iter().filter(|p| p.is_finite());
+                let out = from.map(|p| truth.distance(*p).min(FAR)).fold(0.0, f64::max);
+                let missing = samples.iter().map(|p| mesh.distance(*p)).fold(0.0, f64::max);
+                out.max(missing)
+            }
+            Against::Mesh(reference) => mesh
+                .farthest_from(reference)
+                .max(reference.farthest_from(mesh)),
+        }
+    }
 }
 
 /// A mesh as a surface to measure distances to.
@@ -239,13 +278,20 @@ impl Surface {
         Ok(Self { points, mesh: shape })
     }
 
+    /// How far `p` is from this surface, up to [`FAR`].
+    fn distance(&self, p: DVec3) -> f64 {
+        match &self.mesh {
+            Some(mesh) => (mesh.project_local_point(p, false).point - p).length().min(FAR),
+            None => FAR,
+        }
+    }
+
     /// The farthest any of this surface's points lies from `other`, up to [`FAR`].
     fn farthest_from(&self, other: &Surface) -> f64 {
-        let Some(mesh) = &other.mesh else { return FAR };
         self.points
             .iter()
             .filter(|p| p.is_finite())
-            .map(|p| (mesh.project_local_point(*p, false).point - *p).length().min(FAR))
+            .map(|p| other.distance(*p))
             .fold(0.0, f64::max)
     }
 }

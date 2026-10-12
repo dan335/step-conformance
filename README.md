@@ -10,7 +10,8 @@ and scores the result against two things that depend on no one importer:
   box its geometry cannot leave, and where its assembly puts each part. These are
   read from the file's text by
   [step-check](https://github.com/dan335/camcraft/tree/main/crates/step-check).
-- **A far finer mesh of the same file:** OpenCascade's, at 0.001 mm.
+- **The true surface:** exact for the generated parts, which know their own shape,
+  and OpenCascade's mesh at 0.001 mm for the rest.
 
 On the parts here, released truck puts surface 53 mm off the bowl. On a part that
 cannot be published, solidcraft puts surface 108 mm off a B-spline face that wraps all
@@ -21,13 +22,29 @@ same is being made.
 
 See [results/RESULTS.md](results/RESULTS.md) for every part at every tolerance.
 
-12 October 2026, on the seven parts below at four tolerances each:
+12 October 2026: 23 parts at four tolerances each, 7 shop parts and 16 generated.
 
-| reader | passes | version |
-|---|---|---|
-| OpenCascade | 28 of 28 | opencascade-rs 0.3.0 with camcraft's patches, OCCT 7.8.1 |
-| [solidcraft](https://github.com/bherbruck/solidcraft) | 28 of 28 | b4491ac |
-| [truck](https://github.com/ricosjp/truck) | 22 of 28 | truck-stepio 0.3.0, truck-meshalgo 0.4.0 (crates.io) |
+| reader | shop parts | generated parts | version |
+|---|---|---|---|
+| OpenCascade | 28 of 28 | 64 of 64 | opencascade-rs 0.3.0 with camcraft's patches, OCCT 7.8.1 |
+| [solidcraft](https://github.com/bherbruck/solidcraft) | 28 of 28 | 51 of 64 | 113ded5 |
+| [ogeom](https://github.com/gilbertorconde/ogeom-rs) | 28 of 28 | 46 of 64 | 0.9.16 |
+| [truck](https://github.com/ricosjp/truck), master | 23 of 28 | 56 of 64 | 88ed005 |
+| truck, released | 22 of 28 | 48 of 64 | truck-stepio 0.3.0, truck-meshalgo 0.4.0 |
+| [brepkit](https://github.com/andymai/brepkit) | 20 of 28 | 18 of 64 | 4.1.49 |
+
+Three readers that pass every shop part fail generated ones, which is what the
+generated parts are for:
+
+- Every reader but OpenCascade fails a cone that comes to a point; most put surface
+  30 mm off it, with or without a vertex at the apex.
+- ogeom loses B-spline faces that wrap all the way round with no seam edge (the
+  cylinder, dome and torus) and puts the plain dome 20 mm off.
+- solidcraft puts the plain half-torus 5 mm off.
+- Released truck ignores assembly placements, and on the bowl times out or lands
+  53 mm off; master mends most of that.
+- brepkit misreads cylinders written as Fusion writes them, and ignores units and
+  placements.
 
 ## How a reader is scored
 
@@ -36,19 +53,20 @@ Each part is read at 0.0125, 0.05, 0.1 and 0.5 mm. At each one:
 1. **The file checks.** At least as many faces as the file defines, none of them
    empty; no part of the mesh outside the file's own geometry; the mesh reaching
    every vertex the file defines.
-2. **The distance to the reference, both ways.** How far the reader's mesh lies from
-   the reference surface, and how far the reference lies from it, which finds missing
-   surface. Both are measured at every vertex and every triangle's centre.
+2. **The distance to the true surface, both ways.** How far the reader's mesh lies
+   from it, measured at every vertex and every triangle's centre, and how far it lies
+   from the mesh, which finds missing surface. For a generated part both are exact;
+   for the rest, the true surface is OpenCascade's mesh at 0.001 mm.
 
 A reader passes a part at a tolerance when the checks pass and neither distance is
 more than four times the tolerance. Four, because OpenCascade's own mesh reaches 3.4
 times its tolerance on `bowl_01` at 0.0125 mm, measured against its finer one. A
 reader that takes more than 60 seconds fails.
 
-Two limits to keep in mind. The reference is OpenCascade, not the true surface: a
-reader that is right where OpenCascade is wrong is scored as wrong, so a failure is
-worth a look rather than taken on trust. And distances are measured at points, not
-everywhere between them.
+Two limits to keep in mind. On the shop parts the reference is OpenCascade, not the
+true surface: a reader that is right where OpenCascade is wrong is scored as wrong
+there, so a failure on one of those is worth a look rather than taken on trust. And
+distances are measured at points, not everywhere between them.
 
 ## Adding a reader
 
@@ -84,7 +102,42 @@ yours there, with a build step in `run.sh`, and send a pull request.
 
 ## The parts
 
-[corpus/](corpus/), free for anyone to use under [CC0](corpus/LICENSE).
+[corpus/](corpus/), free for anyone to use under [CC0](corpus/LICENSE): shop parts,
+and parts generated to break readers in known ways.
+
+### Generated parts
+
+[corpus/generated/](corpus/generated/) holds parts whose exact shape is known: each is
+one or more solids of revolution, a profile of segments and arcs turned about an
+axis, written as STEP in the dialect the test needs, beside a `.truth.json` giving
+that shape. The nearest point of such a surface lies in the half-plane through the
+axis and the point, so the runner measures them exactly.
+[generate/](generate/) writes them, the same every run:
+
+```sh
+cargo run --manifest-path generate/Cargo.toml -- corpus/generated
+```
+
+| part | what it tests |
+|---|---|
+| `cylinder` | a face wrapping all the way round, bounded only by two circles with no seam edge: how Fusion writes every cylinder |
+| `cylinder_seam` | the same with a seam edge, as OpenCascade writes it: the control |
+| `cylinder_nurbs` | the side as the rational B-spline that is exactly a cylinder, closed round, no seam |
+| `cone_point` | a cone coming to a point that no vertex marks |
+| `cone_point_vertex` | the same with a vertex loop at the apex: the control |
+| `dome` | a hemisphere on a disc: the pole inside the face |
+| `dome_nurbs` | the dome as a rational B-spline, a whole row of control points at the pole |
+| `washer` | flat faces with holes, and an inner cylinder whose normal points at the axis |
+| `torus_ring` | half a torus, doubly curved, bounded by its inner and outer equators |
+| `torus_ring_nurbs` | the same as a rational B-spline |
+| `cylinder_inch` | a part in inches |
+| `sheet_disc` | 3.6 m across and 19 mm thick, about a 12 ft sheet |
+| `tiny_pin` | half a millimetre across |
+| `far_cylinder` | 100 m from the origin |
+| `cylinder_placed` | a component in an assembly, tipped over and moved |
+| `cylinder_twice` | a component used twice, once turned on its side |
+
+### Shop parts
 
 | file | unit | faces | surfaces | size (mm) | what it exercises |
 |---|---|---|---|---|---|
@@ -118,3 +171,6 @@ first time, which takes several minutes. Clones and builds go under `work/`.
 ## Licence
 
 The code is MIT or Apache-2.0, at your option. The parts in `corpus/` are CC0.
+`adapters/brepkit` builds a program that links brepkit, which is AGPL-3.0, so that
+program is AGPL-3.0 too; `run.sh` builds and runs it locally and never distributes
+it.

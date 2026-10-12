@@ -3,7 +3,9 @@
 #
 #   ./run.sh                     every reader, on corpus/
 #   ./run.sh ../private/parts    on those STEP files too (they are not recorded)
-#   SOLIDCRAFT_REV=07e263d TRUCK_REV=<sha> ./run.sh
+#   SOLIDCRAFT_REV=07e263d ./run.sh   solidcraft at a given revision
+#
+# The other readers' versions are pinned in their adapters' Cargo.toml.
 #
 # Clones and builds go under work/, which git ignores. The first build compiles
 # OpenCascade from source: it needs cmake and a C++ compiler, and takes minutes.
@@ -15,7 +17,6 @@ W=work
 mkdir -p "$W"
 export CMAKE_POLICY_VERSION_MINIMUM=3.5 # OCCT 7.8 asks for a cmake older than 4 allows
 SOLIDCRAFT_REV=${SOLIDCRAFT_REV:-main}
-TRUCK_REV=${TRUCK_REV:-master}
 VERSIONS=()
 
 build() { # name manifest target-dir
@@ -39,11 +40,15 @@ VERSIONS+=("opencascade: opencascade-rs 0.3.0 with camcraft's patches, OCCT 7.8.
 build truck adapters/truck/Cargo.toml "$W/target/truck"
 VERSIONS+=("truck: truck-stepio 0.3.0, truck-meshalgo 0.4.0 (crates.io)")
 
-# truck's git master: the same reader, built against the repository.
-if [ -d adapters/truck-master ]; then
-  build truck-master adapters/truck-master/Cargo.toml "$W/target/truck-master"
-  VERSIONS+=("truck-master: $(git ls-remote https://github.com/ricosjp/truck "$TRUCK_REV" | cut -c1-7) ($TRUCK_REV)")
-fi
+# truck's git master, which has not been released since September 2024.
+build truck-master adapters/truck-master/Cargo.toml "$W/target/truck-master"
+VERSIONS+=("truck-master: ricosjp/truck at $(grep -m1 -oE 'rev = "[0-9a-f]{7}' adapters/truck-master/Cargo.toml | cut -c8-)")
+
+# ogeom, and brepkit (AGPL-3.0: built and run here only, never distributed).
+build ogeom adapters/ogeom/Cargo.toml "$W/target/ogeom"
+VERSIONS+=("ogeom: $(grep -m1 -oE '"=[0-9.]+"' adapters/ogeom/Cargo.toml | tr -d '"=') (crates.io)")
+build brepkit adapters/brepkit/Cargo.toml "$W/target/brepkit"
+VERSIONS+=("brepkit: $(grep -m1 -oE '"=[0-9.]+"' adapters/brepkit/Cargo.toml | tr -d '"=') (crates.io)")
 
 # solidcraft: its own STEP reader, built inside a checkout.
 REV=$(clone https://github.com/bherbruck/solidcraft.git "$W/solidcraft" "$SOLIDCRAFT_REV")
@@ -55,36 +60,30 @@ VERSIONS+=("solidcraft: $REV")
 
 READERS=(
   --reader "opencascade=$OCCT"
+  --reader "ogeom=$W/target/ogeom/release/ogeom-reader"
   --reader "solidcraft=$W/solidcraft/target/release/examples/camcraft_export"
   --reader "truck=$W/target/truck/release/truck-reader:file-units"
+  --reader "truck-master=$W/target/truck-master/release/truck-master-reader:file-units"
+  --reader "brepkit=$W/target/brepkit/release/brepkit-reader:file-units"
 )
-if [ -d adapters/truck-master ]; then
-  READERS+=(--reader "truck-master=$W/target/truck-master/release/truck-master-reader:file-units")
-fi
-for extra in ogeom brepkit; do
-  if [ -f "adapters/$extra/Cargo.toml" ]; then
-    build "$extra" "adapters/$extra/Cargo.toml" "$W/target/$extra"
-    READERS+=(--reader "$extra=$W/target/$extra/release/$extra-reader")
-    VERSIONS+=("$extra: $(grep -m1 -E "^$extra" "adapters/$extra/Cargo.toml" | sed 's/ *= */ /')")
-  fi
-done
 
 echo "scoring" >&2
 cargo build --quiet --release
 TABLE=$(./target/release/step-conformance --out "$W/out" --reference "reference=$OCCT" \
-  "${READERS[@]}" corpus "$@")
+  "${READERS[@]}" corpus corpus/generated "$@")
 
 if [ $# -eq 0 ]; then
   {
     echo "# Results"
     echo
-    echo "Run $(date -u +%Y-%m-%d) on $(uname -sm), step-conformance $(git rev-parse --short HEAD 2>/dev/null || echo uncommitted)."
+    echo "Run $(date -u +%Y-%m-%d) on $(uname -sm), step-conformance $(git describe --always --dirty 2>/dev/null || echo uncommitted)."
     echo
     for v in "${VERSIONS[@]}"; do echo "- $v"; done
     echo
-    echo "Each cell: whether the reader passes, how far its mesh lies from the reference"
-    echo "(OpenCascade at 0.001 mm) at worst, and how long it took. See the README for"
-    echo "how a reader is scored."
+    echo "Each cell: whether the reader passes, how far its mesh lies from the true surface"
+    echo "at worst, and how long it took. The true surface is the exact shape for the"
+    echo "generated parts, and OpenCascade's mesh at 0.001 mm for the rest. See the README"
+    echo "for how a reader is scored."
     echo
     echo "$TABLE"
   } > results/RESULTS.md

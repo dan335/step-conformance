@@ -1,0 +1,22 @@
+# A step-conformance reader: brepkit.
+#
+# brepkit is AGPL-3.0-only (or commercial), so the program this builds is
+# AGPL-3.0 too. It is only ever built and run locally, as a separate process
+# the trial starts, for testing; it is not distributed and nothing links it.
+[package]
+name    = "brepkit-reader"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "AGPL-3.0-only"
+
+[dependencies]
+# The crates.io release, 2026-10-11 (tag v4.1.49 in andymai/brepkit).
+brepkit-io         = "=4.1.49"
+brepkit-math       = "=4.1.49"
+brepkit-operations = "=4.1.49"
+brepkit-topology   = "=4.1.49"
+# brepkit reports a face it skips through `log`; this collects those lines.
+log = "0.4"
+
+[workspace]

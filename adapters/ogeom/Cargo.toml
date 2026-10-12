@@ -1,0 +1,17 @@
+# A step-conformance reader: ogeom (MIT OR Apache-2.0).
+# Standalone; not part of any workspace.
+[package]
+name    = "ogeom-reader"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# The crates.io release, 2026-10-09 (tag v0.9.16 in gilbertorconde/ogeom-rs).
+ogeom-core = "=0.9.16"
+ogeom-doc  = "=0.9.16"
+ogeom-io   = "=0.9.16"
+ogeom-mesh = "=0.9.16"
+ogeom-topo = "=0.9.16"
+
+[workspace]
