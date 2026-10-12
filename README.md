@@ -32,7 +32,7 @@ and 19 parts of known shape, three of them big, to time readers on.
 | [solidcraft](https://github.com/bherbruck/solidcraft) | 28 of 28 | 1 of 4 | 63 of 76 | f0292b1 |
 | [ogeom](https://github.com/gilbertorconde/ogeom-rs) | 28 of 28 | 1 of 4 | 58 of 76 | 0.9.16 |
 | [truck](https://github.com/ricosjp/truck), master | 23 of 28 | 0 of 4 | 68 of 76 | 88ed005 |
-| truck, released | 22 of 28 | 0 of 4 | 60 of 76 | truck-stepio 0.3.0, truck-meshalgo 0.4.0 |
+| truck, released | 21 of 28 | 0 of 4 | 60 of 76 | truck-stepio 0.3.0, truck-meshalgo 0.4.0 |
 | [brepkit](https://github.com/andymai/brepkit) | 20 of 28 | 0 of 4 | 30 of 76 | 4.1.49 |
 
 Three readers that pass every shop part fail generated ones, which is what the
@@ -46,7 +46,8 @@ generated parts are for:
   cylinder, dome and torus) and puts the plain dome 20 mm off.
 - solidcraft puts the plain half-torus 5 mm off.
 - Released truck ignores assembly placements, and on the bowl times out or lands
-  53 mm off; master mends most of that.
+  53 mm off; master mends most of that. It also lands `sled_base` 0.069 mm off at
+  0.0125 mm on x86, which it passed on an Apple M2 Pro.
 - brepkit misreads cylinders written as Fusion writes them, and ignores units and
   placements.
 
@@ -54,38 +55,39 @@ Every reader reads the three big parts right, at every tolerance.
 
 ### Speed and memory
 
-On an Apple M2 Pro, against OpenCascade, on the runs both pass, averaged
-geometrically: 0.5× is twice as fast, or half the memory.
+On an idle Intel Core i7-12700KF, under Linux in WSL2, against OpenCascade, on the
+runs both pass, averaged geometrically: 0.5× is twice as fast, or half the memory.
 
 | reader | runs both pass | time | CPU time | reading | meshing | peak memory | triangles |
 |---|---|---|---|---|---|---|---|
-| solidcraft | 92 | 0.69× | 1.1× | 1.0× | 0.93× | 0.79× | 1.4× |
-| ogeom | 87 | 0.30× | 0.55× | 0.63× | 0.25× | 0.41× | 1.3× |
-| truck, master | 91 | 0.36× | 0.46× | 0.31× | 0.31× | 0.61× | 0.63× |
-| truck, released | 82 | 0.38× | 0.49× | 0.30× | 0.34× | 0.60× | 0.69× |
-| brepkit | 50 | 0.23× | 0.27× | 0.038× | 0.51× | 0.28× | 0.86× |
+| solidcraft | 92 | 1.1× | 2.1× | 1.3× | 1.1× | 0.42× | 1.4× |
+| ogeom | 87 | 0.47× | 0.81× | 0.74× | 0.25× | 0.37× | 1.3× |
+| truck, master | 91 | 0.40× | 0.68× | 0.21× | 0.49× | 0.32× | 0.64× |
+| truck, released | 81 | 0.41× | 0.72× | 0.20× | 0.51× | 0.31× | 0.70× |
+| brepkit | 50 | 0.26× | 0.39× | 0.031× | 0.50× | 0.27× | 0.87× |
 
-Every reader beats OpenCascade there, but most of those parts are small, and on a
-small part most of OpenCascade's time is starting up: 12 ms of its 15 on the
-cylinder. The big plate shows what the small parts cannot. At 0.0125 mm:
+Most of those parts are small, so starting the program counts for much. On Linux
+OpenCascade starts quickly, in under 2 ms of its 5.6 on the cylinder; on the M2
+Pro it took 12 ms of 15, and every reader beat it there, solidcraft included. The
+big plate shows what the small parts cannot. At 0.0125 mm:
 
 | reader | `plate_100_holes` | `plate_900_holes` | growth | peak memory on `plate_900_holes` |
 |---|---|---|---|---|
-| OpenCascade | 346 ms | 13.5 s | 39× | 1146 MB |
-| solidcraft | 465 ms | 19.9 s | 43× | 733 MB |
-| ogeom | 94 ms | 477 ms | 5× | 217 MB |
-| truck, master | 126 ms | 5.89 s | 47× | 118 MB |
-| truck, released | 122 ms | 5.72 s | 47× | 111 MB |
-| brepkit | 67 ms | 2.75 s | 41× | 132 MB |
+| OpenCascade | 308 ms | 14.8 s | 48× | 1000 MB |
+| solidcraft | 453 ms | 19.3 s | 43× | 535 MB |
+| ogeom | 99 ms | 879 ms | 9× | 148 MB |
+| truck, master | 118 ms | 5.66 s | 48× | 106 MB |
+| truck, released | 114 ms | 5.26 s | 46× | 98 MB |
+| brepkit | 61 ms | 2.13 s | 35× | 102 MB |
 
-- Every reader but ogeom takes about forty times as long on a part nine times the
-  size, nearly all of it meshing. ogeom takes five times as long, and meshes the 900
-  holes in a third of a second.
-- OpenCascade holds over a gigabyte for the plate, and spends 1.3 s reading the
-  1.4 MB file, which brepkit reads in 14 ms.
-- With 1600 holes, solidcraft took 57 s and OpenCascade 33 s, so the plate stops at
-  900: past 60 s a reader fails.
-- The grooved shaft's 753 faces take every reader under 0.7 s.
+- Every reader but ogeom takes 35 to 48 times as long on a part nine times the size,
+  nearly all of it meshing. ogeom takes nine times as long, and meshes the 900 holes
+  in a third of a second.
+- OpenCascade holds a gigabyte for the plate, and spends 1.7 s reading the 1.4 MB
+  file, which brepkit reads in 15 ms.
+- On the M2 Pro, with 1600 holes, solidcraft took 57 s and OpenCascade 33 s, so the
+  plate stops at 900: past 60 s a reader fails.
+- The grooved shaft's 753 faces take every reader under 0.8 s.
 
 ## How a reader is scored
 
@@ -121,7 +123,8 @@ run again, up to five times or for ten seconds in all, and the median taken of:
 - **reading** and **meshing**, the reader's own account of them, for a reader that
   gives one. Every reader here does; see [Adding a reader](#adding-a-reader).
 - **peak memory**, the most the reader held in RAM at once, as the operating system
-  reports it once the reader exits (on macOS and Linux).
+  reports it once the reader exits (on macOS and Linux). Each reader is started by a
+  small relay process, since Linux would otherwise charge it the scorer's own peak.
 
 The readers are then compared with OpenCascade on the runs both pass: each figure is
 the reader's divided by OpenCascade's, averaged geometrically, so 0.5× is twice as

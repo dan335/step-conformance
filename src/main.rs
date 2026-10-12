@@ -141,6 +141,10 @@ fn args() -> Result<Args, Box<dyn Error>> {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    #[cfg(unix)]
+    if std::env::args().nth(1).as_deref() == Some(RELAY) {
+        return relay();
+    }
     let mut a = args()?;
     let reference = a.reference.take().ok_or("--reference NAME=PROGRAM is required")?;
     println!(
@@ -547,13 +551,15 @@ fn read(
     let stem = stem(part);
     let (bin, err) = (out.join(format!("{stem}.bin")), out.join(format!("{stem}.err")));
     let times = out.join(format!("{stem}.time"));
-    for stale in [&bin, &err, &times] {
+    let report = out.join(format!("{stem}.cost"));
+    for stale in [&bin, &err, &times, &report] {
         std::fs::remove_file(stale).ok();
     }
     let asked = if reader.file_units { tolerance / facts.unit.mm } else { tolerance };
     let mut command = Command::new(&reader.program);
     command.arg(&out).arg(asked.to_string()).arg(part);
-    let Some(mut cost) = run(command, timeout).map_err(|e| format!("{}: {e}", reader.program.display()))? else {
+    let ran = run(command, &report, timeout).map_err(|e| format!("{}: {e}", reader.program.display()))?;
+    let Some(mut cost) = ran else {
         return Ok(Ran::TimedOut);
     };
     (cost.read, cost.mesh) = phases(&times);
@@ -575,53 +581,95 @@ fn read(
     Ok(Ran::Meshed(mesh, cost))
 }
 
+/// The first argument that makes this program [`relay`] instead of scoring.
+#[cfg(unix)]
+const RELAY: &str = "--relay";
+
 /// Run `command` to its exit, or kill it past `timeout` and return `None`.
 ///
-/// `wait4` blocks until the reader exits and says what it used, so a thread waits
-/// on it while this one keeps the time: the exit is timed to the moment, not to the
-/// next poll.
+/// The reader is not started from here but by a [`relay`], a fresh copy of this
+/// program that writes what the reader cost to `report`. Linux counts a process's
+/// peak memory from before it replaced itself with the reader, so a reader started
+/// from here would be charged this program's own peak, the parts and surfaces it
+/// holds. Started from the relay, it is charged the relay's, a few megabytes. The
+/// relay leads its own process group, so a timeout kills the reader with it.
 #[cfg(unix)]
-fn run(mut command: Command, timeout: Duration) -> std::io::Result<Option<Cost>> {
-    let start = Instant::now();
-    let child = command.spawn()?;
+fn run(command: Command, report: &Path, timeout: Duration) -> std::io::Result<Option<Cost>> {
+    use std::os::unix::process::CommandExt;
+    let mut relay = Command::new(std::env::current_exe()?);
+    relay.arg(RELAY).arg(report).arg(command.get_program()).args(command.get_args()).process_group(0);
+    let mut child = relay.spawn()?;
     let pid = child.id() as libc::pid_t;
     let (exited, exit) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let mut status = 0;
-        // SAFETY: `rusage` is plain integers, for which all zeroes is a valid value,
-        // and `wait4` writes only through the two pointers it is given.
-        let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
-        while unsafe { libc::wait4(pid, &mut status, 0, &mut usage) } < 0
-            && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
-        {}
-        let _ = exited.send((start.elapsed(), usage));
+        let _ = exited.send(child.wait());
     });
     match exit.recv_timeout(timeout) {
-        Ok((wall, usage)) => {
-            let seconds = |t: libc::timeval| Duration::new(t.tv_sec as u64, t.tv_usec as u32 * 1000);
-            // Linux and the BSDs count the peak in kilobytes; macOS in bytes.
-            let unit = if cfg!(target_os = "macos") { 1 } else { 1024 };
+        Ok(status) => {
+            status?;
+            let figures: Vec<u64> = std::fs::read_to_string(report)?
+                .split_whitespace()
+                .map(|n| n.parse().map_err(std::io::Error::other))
+                .collect::<Result<_, _>>()?;
+            let [wall, cpu, memory] = figures[..] else {
+                return Err(std::io::Error::other(format!("the relay's report {} is malformed", report.display())));
+            };
             Ok(Some(Cost {
-                wall,
-                cpu: Some(seconds(usage.ru_utime) + seconds(usage.ru_stime)),
-                memory: Some(usage.ru_maxrss.max(0) as u64 * unit),
+                wall: Duration::from_nanos(wall),
+                cpu: Some(Duration::from_nanos(cpu)),
+                memory: Some(memory),
                 ..Cost::default()
             }))
         }
         Err(_) => {
-            // SAFETY: a plain system call. The reader is not yet reaped, so the pid is
-            // still its own.
-            unsafe { libc::kill(pid, libc::SIGKILL) };
+            // SAFETY: a plain system call. The relay is not yet reaped, so its group
+            // is still its own and the reader's.
+            unsafe { libc::kill(-pid, libc::SIGKILL) };
             let _ = exit.recv();
             Ok(None)
         }
     }
 }
 
+/// `--relay REPORT PROGRAM ARGS...`: run `PROGRAM ARGS...` and write to `REPORT` how
+/// long it ran, its CPU time and its peak memory in bytes, in nanoseconds and bytes
+/// on one line. See [`run`].
+#[cfg(unix)]
+fn relay() -> Result<(), Box<dyn Error>> {
+    let mut args = std::env::args_os().skip(2);
+    let (Some(report), Some(program)) = (args.next(), args.next()) else {
+        return Err(format!("{RELAY} REPORT PROGRAM ARGS...").into());
+    };
+    let start = Instant::now();
+    let pid = Command::new(program).args(args).spawn()?.id() as libc::pid_t;
+    let mut status = 0;
+    // SAFETY: `rusage` is plain integers, for which all zeroes is a valid value, and
+    // `wait4` writes only through the two pointers it is given.
+    let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+    while unsafe { libc::wait4(pid, &mut status, 0, &mut usage) } < 0 {
+        let e = std::io::Error::last_os_error();
+        if e.kind() != std::io::ErrorKind::Interrupted {
+            return Err(e.into());
+        }
+    }
+    let wall = start.elapsed();
+    let nanos = |t: libc::timeval| t.tv_sec as u64 * 1_000_000_000 + t.tv_usec as u64 * 1000;
+    // Linux and the BSDs count the peak in kilobytes; macOS in bytes.
+    let unit = if cfg!(target_os = "macos") { 1 } else { 1024 };
+    let figures = format!(
+        "{} {} {}\n",
+        wall.as_nanos(),
+        nanos(usage.ru_utime) + nanos(usage.ru_stime),
+        usage.ru_maxrss.max(0) as u64 * unit
+    );
+    std::fs::write(report, figures)?;
+    Ok(())
+}
+
 /// Run `command` to its exit, or kill it past `timeout` and return `None`. Off Unix
 /// there is no `wait4`: only the time is known.
 #[cfg(not(unix))]
-fn run(mut command: Command, timeout: Duration) -> std::io::Result<Option<Cost>> {
+fn run(mut command: Command, _report: &Path, timeout: Duration) -> std::io::Result<Option<Cost>> {
     let start = Instant::now();
     let mut child = command.spawn()?;
     loop {
