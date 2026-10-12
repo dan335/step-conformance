@@ -4,6 +4,10 @@ meshing in truck-based STEP readers.
 
     python3 generate/freeform_panel.py corpus/freeform_panel.step
     python3 generate/freeform_panel.py OUT.step key=value ...   # override any DEFAULTS entry
+    python3 generate/freeform_panel.py --truth-only corpus/freeform_panel.step
+
+Each writes the part's exact shape beside it too, as `<stem>.truth.json` for
+step-conformance; `--truth-only` writes just that, leaving the STEP file alone.
 
 Pure Python 3 (no packages), deterministic: the same arguments always give the same bytes.
 The geometry is generated from the formulas below; nothing is taken from any other part.
@@ -24,11 +28,12 @@ The body (STEP unit inch, 5 faces, one closed shell):
   and is trimmed by the pocket wall.
 * Bottom: a plane. Top: a plane with the pocket opening as an inner loop.
 
-What it reproduces: OpenCascade meshes it within its tolerance at every tolerance tried;
-SolidCraft's reader meshes it correctly at 0.0125 mm but at 0.05, 0.1 and 0.5 mm puts triangles
-5 to 150 mm off the outer wall, warning "face wrapping around a closed surface kept whole:
-cannot cut a ring edge at the split line"; upstream truck (robust_triangulation) puts triangles
-off the wall, and its plain triangulation leaves the B-spline faces empty.
+What it reproduces: SolidCraft's reader at 0.05, 0.1 and 0.5 mm puts triangles 5 to 150 mm
+off the outer wall, warning "face wrapping around a closed surface kept whole: cannot cut a
+ring edge at the split line"; upstream truck (robust_triangulation) puts triangles off the
+wall, and its plain triangulation leaves the B-spline faces empty. Measured against the exact
+shape, OpenCascade at 0.1 mm and finer, and SolidCraft at 0.0125 mm, cut a concave bend of the
+bottom rim near (-120.5, -100.6), putting triangles 0.5 to 0.6 mm outside the part.
 
 Why: the rings lie off the wall by more than the 1e-6 truck's exact inversion accepts, so every
 boundary point falls back to a nearest-point search seeded from the point before. At coarse
@@ -36,6 +41,7 @@ tolerances those points are far apart, and at a concave bend the search leaves t
 the surface's extrapolated span, where the mesh then follows it. The numbers depend on these
 exact bytes: the failure is chaotic in the geometry, so commit the file, don't regenerate it.
 """
+import json
 import math
 import os
 import sys
@@ -499,7 +505,28 @@ def build(cfg):
 
     top = st.plane(S((0, 0, H)), (0, 0, 1), (1, 0, 0))
     faces.append(st.face(top_loops, top, True))
-    return st.text(faces, cfg["name"], cfg["inch"]), log
+
+    # The exact shape, in millimetres, for step-conformance's truth.json: the surfaces,
+    # and each face as what trims it. The walls run between levels (a plane, or the
+    # floor), the floor lies within the pocket wall's lower rim, and the caps are flat
+    # within the walls' rims. Trimmed at the exact intersections, which the file's
+    # fitted rings follow to the deviations logged above.
+    mm = cfg["scale"]
+
+    def surface(s):
+        return {"degree": [s.pu, s.pv], "u_knots": s.ku, "v_knots": s.kv,
+                "points": [[[c * mm for c in p] for p in col] for col in s.grid]}
+
+    truth = {"solids": [], "freeform": {
+        "surfaces": [surface(W), surface(P), surface(F)],
+        "graphs": [{"surface": 2, "x": [fx0 * mm, fx1 * mm], "y": [fy0 * mm, fy1 * mm]}],
+        "bands": [{"surface": 0, "from": {"plane": 0.0}, "to": {"plane": H * mm}},
+                  {"surface": 1, "from": {"graph": 0}, "to": {"plane": H * mm}}],
+        "floors": [{"graph": 0, "within": 1, "center": [px * mm, py * mm]}],
+        "caps": [{"z": 0.0, "rims": [{"band": 0, "end": "from"}]},
+                 {"z": H * mm, "rims": [{"band": 0, "end": "to"}, {"band": 1, "end": "to"}]}],
+    }}
+    return st.text(faces, cfg["name"], cfg["inch"]), log, truth
 
 
 # Model units are mm before `scale`; the file is written in inches.
@@ -536,12 +563,19 @@ def parse(argv):
 
 
 if __name__ == "__main__":
-    args = [a for a in sys.argv[1:] if "=" not in a]
+    truth_only = "--truth-only" in sys.argv[1:]
+    args = [a for a in sys.argv[1:] if "=" not in a and a != "--truth-only"]
     cfg = parse([a for a in sys.argv[1:] if "=" in a])
     out = args[0] if args else os.path.join(os.path.dirname(os.path.abspath(__file__)), cfg["name"] + ".step")
     cfg["name"] = os.path.splitext(os.path.basename(out))[0]
-    text, log = build(cfg)
-    with open(out, "w", newline="\n") as fh:
-        fh.write(text)
-    print(out)
+    text, log, truth = build(cfg)
+    if not truth_only:
+        with open(out, "w", newline="\n") as fh:
+            fh.write(text)
+        print(out)
+    beside = os.path.splitext(out)[0] + ".truth.json"
+    with open(beside, "w", newline="\n") as fh:
+        json.dump(truth, fh)
+        fh.write("\n")
+    print(beside)
     print("\n".join(log))

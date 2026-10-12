@@ -9,6 +9,11 @@
 //! walls lies over the nearest point of the profile, and of a cap straight below or
 //! above `p` when `p` lies over the profile: exact again. An index of each profile's
 //! pieces keeps both cheap with hundreds of faces or holes.
+//!
+//! A freeform part is B-spline walls and floors trimmed by levels, and flat caps:
+//! see [`freeform`].
+
+mod freeform;
 
 use std::error::Error;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
@@ -23,6 +28,7 @@ pub struct Truth {
     solids: Vec<Solid>,
     #[serde(default)]
     prisms: Vec<Prism>,
+    freeform: Option<freeform::Freeform>,
 }
 
 /// A solid of revolution as `truth.json` gives it.
@@ -102,13 +108,15 @@ impl Truth {
             .iter()
             .map(|s| s.index.nearest(s.half_plane(p), &s.pieces));
         let prisms = self.prisms.iter().map(|prism| prism.distance(p));
-        solids.chain(prisms).fold(f64::INFINITY, f64::min)
+        let freeform = self.freeform.iter().map(|f| f.distance(p));
+        solids.chain(prisms).chain(freeform).fold(f64::INFINITY, f64::min)
     }
 
     /// Points spread over every surface of the part. On a solid of revolution,
     /// `along` steps down each piece of profile, fewer on a profile of more than 16
     /// pieces, and `around` steps round the axis. On a prism, points about a
-    /// `around`th of its widest side apart.
+    /// `around`th of its widest side apart. On a freeform part, every vertex of its
+    /// fine mesh, and its caps as prisms.
     pub fn samples(&self, along: usize, around: usize) -> Vec<DVec3> {
         let mut out = Vec::new();
         for s in &self.solids {
@@ -129,6 +137,9 @@ impl Truth {
         }
         for prism in &self.prisms {
             prism.samples(around, &mut out);
+        }
+        if let Some(f) = &self.freeform {
+            f.samples(around, &mut out);
         }
         out
     }

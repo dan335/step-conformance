@@ -10,14 +10,15 @@ and scores the result against two things that depend on no one importer:
   box its geometry cannot leave, and where its assembly puts each part. These are
   read from the file's text by
   [step-check](https://github.com/dan335/camcraft/tree/main/crates/step-check).
-- **The true surface:** exact for the generated parts, which know their own shape,
-  and OpenCascade's mesh at 0.001 mm for the rest.
+- **The true surface:** exact for the generated parts and the freeform panel, which
+  know their own shape, and OpenCascade's mesh at 0.001 mm for the shop parts.
 
 It also times each importer, and measures its memory, on the parts it reads right.
 
-On the parts here, every reader but OpenCascade puts surface millimetres to a metre
-off a part somewhere: a cone that comes to a point, a B-spline wall that wraps all
-the way round, a half-torus, a revolved rim.
+On the parts here, every reader puts surface off a part somewhere. OpenCascade cuts
+a bend in the freeform panel's rim by 0.6 mm; every other reader puts surface
+millimetres to a metre off: a cone that comes to a point, a B-spline wall that wraps
+all the way round, a half-torus, a revolved rim.
 
 ## Results
 
@@ -28,9 +29,9 @@ and 19 parts of known shape, three of them big, to time readers on.
 
 | reader | shop parts | freeform panel | parts of known shape | version |
 |---|---|---|---|---|
-| OpenCascade | 28 of 28 | 4 of 4 | 76 of 76 | opencascade-rs 0.3.0 with camcraft's patches, OCCT 7.8.1 |
-| [solidcraft](https://github.com/bherbruck/solidcraft) | 28 of 28 | 1 of 4 | 63 of 76 | f0292b1 |
-| [ogeom](https://github.com/gilbertorconde/ogeom-rs) | 28 of 28 | 1 of 4 | 58 of 76 | 0.9.16 |
+| OpenCascade | 28 of 28 | 1 of 4 | 76 of 76 | opencascade-rs 0.3.0 with camcraft's patches, OCCT 7.8.1 |
+| [solidcraft](https://github.com/bherbruck/solidcraft) | 28 of 28 | 0 of 4 | 63 of 76 | f0292b1 |
+| [ogeom](https://github.com/gilbertorconde/ogeom-rs) | 28 of 28 | 3 of 4 | 58 of 76 | 0.9.16 |
 | [truck](https://github.com/ricosjp/truck), master | 23 of 28 | 0 of 4 | 68 of 76 | 88ed005 |
 | truck, released | 21 of 28 | 0 of 4 | 60 of 76 | truck-stepio 0.3.0, truck-meshalgo 0.4.0 |
 | [brepkit](https://github.com/andymai/brepkit) | 20 of 28 | 0 of 4 | 30 of 76 | 4.1.49 |
@@ -38,8 +39,11 @@ and 19 parts of known shape, three of them big, to time readers on.
 Three readers that pass every shop part fail generated ones, which is what the
 generated parts are for:
 
-- The freeform panel defeats every reader but OpenCascade: solidcraft puts surface
-  5 to 149 mm off it, ogeom 5.5 mm, truck 12 mm, brepkit 14 mm.
+- Nothing reads the freeform panel at 0.0125 mm. OpenCascade cuts a concave bend in
+  its bottom rim, putting surface 0.6 mm outside the part at 0.1 mm and finer;
+  solidcraft does the same by 0.47 mm at 0.0125 mm, and puts surface 5 to 149 mm off
+  at coarser tolerances. ogeom reads it from 0.05 mm, and puts surface 5.5 mm off at
+  0.0125 mm, which its main branch fixes. truck puts it 12 mm off, brepkit 14 mm.
 - Every reader but OpenCascade fails a cone that comes to a point; most put surface
   30 mm off it, with or without a vertex at the apex.
 - ogeom loses B-spline faces that wrap all the way round with no seam edge (the
@@ -98,8 +102,9 @@ Each part is read at 0.0125, 0.05, 0.1 and 0.5 mm. At each one:
    every vertex the file defines.
 2. **The distance to the true surface, both ways.** How far the reader's mesh lies
    from it, measured at every vertex and every triangle's centre, and how far it lies
-   from the mesh, which finds missing surface. For a generated part both are exact;
-   for the rest, the true surface is OpenCascade's mesh at 0.001 mm.
+   from the mesh, which finds missing surface. For a generated part both are exact,
+   and for the freeform panel exact to 0.001 mm; for the shop parts, the true surface
+   is OpenCascade's mesh at 0.001 mm.
 
 A reader passes a part at a tolerance when the checks pass and neither distance is
 more than four times the tolerance. Four, because OpenCascade's own mesh reaches 3.4
@@ -108,7 +113,9 @@ reader that takes more than 60 seconds fails.
 
 Two limits to keep in mind. On the shop parts the reference is OpenCascade, not the
 true surface: a reader that is right where OpenCascade is wrong is scored as wrong
-there, so a failure on one of those is worth a look rather than taken on trust. And
+there, so a failure on one of those is worth a look rather than taken on trust. The
+freeform panel was scored that way too until its exact shape showed OpenCascade
+cutting a bend in its rim, and failing a reader that did not. And
 distances are measured at points, not everywhere between them.
 
 ## How a reader is timed
@@ -237,6 +244,13 @@ formulas alone. Readers that search for each ring point on the wall from the poi
 before it can step off the wall's domain at a concave bend at coarse tolerances, and
 the mesh follows. Its failures are sensitive to the exact geometry, so the file is
 committed and should not be regenerated in place.
+
+Its exact shape is `freeform_panel.truth.json`, which `generate/freeform_panel.py
+--truth-only corpus/freeform_panel.step` writes beside it: the surfaces, and each face
+as what trims it. step-conformance trims each wall where it exactly crosses the
+planes and the floor, meshes the walls and floor to within 0.001 mm of their
+surfaces, and measures the flat top and bottom exactly. The file's fitted rings
+follow those crossings to under 0.001 mm.
 
 ### Shop parts
 
