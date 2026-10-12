@@ -364,7 +364,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 [[package]]
 name = "step-check"
 version = "0.1.0"
-source = "git+https://github.com/dan335/camcraft#be823d70bf45995af5299404339447ec1dfc0e3d"
+source = "git+https://github.com/dan335/camcraft#5a2d0e6440ada2fda78d92099cdb8c128f59a70e"
 dependencies = [
  "glam",
  "thiserror",

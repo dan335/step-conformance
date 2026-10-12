@@ -13,29 +13,31 @@ and scores the result against two things that depend on no one importer:
 - **The true surface:** exact for the generated parts, which know their own shape,
   and OpenCascade's mesh at 0.001 mm for the rest.
 
-On the parts here, released truck puts surface 53 mm off the bowl. On a part that
-cannot be published, solidcraft puts surface 108 mm off a B-spline face that wraps all
-the way round the part, and truck more than a metre; a public part that does the
-same is being made.
+On the parts here, every reader but OpenCascade puts surface millimetres to a metre
+off a part somewhere: a cone that comes to a point, a B-spline wall that wraps all
+the way round, a half-torus, a revolved rim.
 
 ## Results
 
 See [results/RESULTS.md](results/RESULTS.md) for every part at every tolerance.
 
-12 October 2026: 23 parts at four tolerances each, 7 shop parts and 16 generated.
+12 October 2026: 24 parts at four tolerances each: 7 shop parts, the freeform panel,
+and 16 parts of known shape.
 
-| reader | shop parts | generated parts | version |
-|---|---|---|---|
-| OpenCascade | 28 of 28 | 64 of 64 | opencascade-rs 0.3.0 with camcraft's patches, OCCT 7.8.1 |
-| [solidcraft](https://github.com/bherbruck/solidcraft) | 28 of 28 | 51 of 64 | 113ded5 |
-| [ogeom](https://github.com/gilbertorconde/ogeom-rs) | 28 of 28 | 46 of 64 | 0.9.16 |
-| [truck](https://github.com/ricosjp/truck), master | 23 of 28 | 56 of 64 | 88ed005 |
-| truck, released | 22 of 28 | 48 of 64 | truck-stepio 0.3.0, truck-meshalgo 0.4.0 |
-| [brepkit](https://github.com/andymai/brepkit) | 20 of 28 | 18 of 64 | 4.1.49 |
+| reader | shop parts | freeform panel | parts of known shape | version |
+|---|---|---|---|---|
+| OpenCascade | 28 of 28 | 4 of 4 | 64 of 64 | opencascade-rs 0.3.0 with camcraft's patches, OCCT 7.8.1 |
+| [solidcraft](https://github.com/bherbruck/solidcraft) | 28 of 28 | 1 of 4 | 51 of 64 | 113ded5 |
+| [ogeom](https://github.com/gilbertorconde/ogeom-rs) | 28 of 28 | 1 of 4 | 46 of 64 | 0.9.16 |
+| [truck](https://github.com/ricosjp/truck), master | 23 of 28 | 0 of 4 | 56 of 64 | 88ed005 |
+| truck, released | 22 of 28 | 0 of 4 | 48 of 64 | truck-stepio 0.3.0, truck-meshalgo 0.4.0 |
+| [brepkit](https://github.com/andymai/brepkit) | 20 of 28 | 0 of 4 | 18 of 64 | 4.1.49 |
 
 Three readers that pass every shop part fail generated ones, which is what the
 generated parts are for:
 
+- The freeform panel defeats every reader but OpenCascade: solidcraft puts surface
+  5 to 149 mm off it, ogeom 5.5 mm, truck 12 mm, brepkit 14 mm.
 - Every reader but OpenCascade fails a cone that comes to a point; most put surface
   30 mm off it, with or without a vertex at the apex.
 - ogeom loses B-spline faces that wrap all the way round with no seam edge (the
@@ -136,6 +138,18 @@ cargo run --manifest-path generate/Cargo.toml -- corpus/generated
 | `far_cylinder` | 100 m from the origin |
 | `cylinder_placed` | a component in an assembly, tipped over and moved |
 | `cylinder_twice` | a component used twice, once turned on its side |
+
+### The freeform panel
+
+`freeform_panel.step` stands in for a customer part that cannot be published, and
+breaks readers the same way: a wavy super-ellipse body whose outer and pocket walls are
+cubic B-spline surfaces closed round, with no seam edge of their own, trimmed by
+fitted ring curves that lie a few ten-thousandths of a millimetre off them, as CAD
+exports' do. [generate/freeform_panel.py](generate/freeform_panel.py) writes it from
+formulas alone. Readers that search for each ring point on the wall from the point
+before it can step off the wall's domain at a concave bend at coarse tolerances, and
+the mesh follows. Its failures are sensitive to the exact geometry, so the file is
+committed and should not be regenerated in place.
 
 ### Shop parts
 
