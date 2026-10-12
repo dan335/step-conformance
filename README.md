@@ -27,7 +27,7 @@ and 16 parts of known shape.
 | reader | shop parts | freeform panel | parts of known shape | version |
 |---|---|---|---|---|
 | OpenCascade | 28 of 28 | 4 of 4 | 64 of 64 | opencascade-rs 0.3.0 with camcraft's patches, OCCT 7.8.1 |
-| [solidcraft](https://github.com/bherbruck/solidcraft) | 28 of 28 | 1 of 4 | 51 of 64 | 113ded5 |
+| [solidcraft](https://github.com/bherbruck/solidcraft) | 28 of 28 | 1 of 4 | 51 of 64 | f0292b1 |
 | [ogeom](https://github.com/gilbertorconde/ogeom-rs) | 28 of 28 | 1 of 4 | 46 of 64 | 0.9.16 |
 | [truck](https://github.com/ricosjp/truck), master | 23 of 28 | 0 of 4 | 56 of 64 | 88ed005 |
 | truck, released | 22 of 28 | 0 of 4 | 48 of 64 | truck-stepio 0.3.0, truck-meshalgo 0.4.0 |
