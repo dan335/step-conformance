@@ -1,0 +1,16 @@
+[package]
+name        = "step-conformance"
+version     = "0.1.0"
+edition     = "2024"
+license     = "MIT OR Apache-2.0"
+description = "Score STEP importers on a shared set of parts: against each file's own facts, and against a fine reference mesh."
+repository  = "https://github.com/dan335/step-conformance"
+publish     = false
+
+[dependencies]
+glam        = "0.33"
+parry3d-f64 = "0.31"
+step-check  = { git = "https://github.com/dan335/camcraft" }
+
+# Each reader in adapters/ is its own crate, built by run.sh.
+[workspace]

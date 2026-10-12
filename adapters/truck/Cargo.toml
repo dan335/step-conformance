@@ -1,0 +1,13 @@
+# Upstream truck's crates.io releases. run.sh also builds this against truck's git
+# master, as the reader `truck-master`.
+[package]
+name    = "truck-reader"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+truck-meshalgo = "0.4"
+truck-stepio   = "0.3"
+
+[workspace]

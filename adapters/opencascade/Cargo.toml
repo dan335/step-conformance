@@ -1,0 +1,18 @@
+# OpenCascade through opencascade-rs. The reference every reader is measured
+# against (at 0.001 mm), and a reader in its own right.
+#
+# Per-face triangle counts are not in opencascade-rs 0.3.0; camcraft vendors them
+# (and the MSVC fix), so this builds camcraft's copy until both are released.
+[package]
+name    = "opencascade-reader"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+opencascade = { git = "https://github.com/dan335/camcraft" }
+
+[patch.crates-io]
+opencascade-sys = { git = "https://github.com/dan335/camcraft" }
+
+[workspace]
