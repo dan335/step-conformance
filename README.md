@@ -13,6 +13,8 @@ and scores the result against two things that depend on no one importer:
 - **The true surface:** exact for the generated parts, which know their own shape,
   and OpenCascade's mesh at 0.001 mm for the rest.
 
+It also times each importer, and measures its memory, on the parts it reads right.
+
 On the parts here, every reader but OpenCascade puts surface millimetres to a metre
 off a part somewhere: a cone that comes to a point, a B-spline wall that wraps all
 the way round, a half-torus, a revolved rim.
@@ -21,17 +23,17 @@ the way round, a half-torus, a revolved rim.
 
 See [results/RESULTS.md](results/RESULTS.md) for every part at every tolerance.
 
-12 October 2026: 24 parts at four tolerances each: 7 shop parts, the freeform panel,
-and 16 parts of known shape.
+12 October 2026: 27 parts at four tolerances each: 7 shop parts, the freeform panel,
+and 19 parts of known shape, three of them big, to time readers on.
 
 | reader | shop parts | freeform panel | parts of known shape | version |
 |---|---|---|---|---|
-| OpenCascade | 28 of 28 | 4 of 4 | 64 of 64 | opencascade-rs 0.3.0 with camcraft's patches, OCCT 7.8.1 |
-| [solidcraft](https://github.com/bherbruck/solidcraft) | 28 of 28 | 1 of 4 | 51 of 64 | f0292b1 |
-| [ogeom](https://github.com/gilbertorconde/ogeom-rs) | 28 of 28 | 1 of 4 | 46 of 64 | 0.9.16 |
-| [truck](https://github.com/ricosjp/truck), master | 23 of 28 | 0 of 4 | 56 of 64 | 88ed005 |
-| truck, released | 22 of 28 | 0 of 4 | 48 of 64 | truck-stepio 0.3.0, truck-meshalgo 0.4.0 |
-| [brepkit](https://github.com/andymai/brepkit) | 20 of 28 | 0 of 4 | 18 of 64 | 4.1.49 |
+| OpenCascade | 28 of 28 | 4 of 4 | 76 of 76 | opencascade-rs 0.3.0 with camcraft's patches, OCCT 7.8.1 |
+| [solidcraft](https://github.com/bherbruck/solidcraft) | 28 of 28 | 1 of 4 | 63 of 76 | f0292b1 |
+| [ogeom](https://github.com/gilbertorconde/ogeom-rs) | 28 of 28 | 1 of 4 | 58 of 76 | 0.9.16 |
+| [truck](https://github.com/ricosjp/truck), master | 23 of 28 | 0 of 4 | 68 of 76 | 88ed005 |
+| truck, released | 22 of 28 | 0 of 4 | 60 of 76 | truck-stepio 0.3.0, truck-meshalgo 0.4.0 |
+| [brepkit](https://github.com/andymai/brepkit) | 20 of 28 | 0 of 4 | 30 of 76 | 4.1.49 |
 
 Three readers that pass every shop part fail generated ones, which is what the
 generated parts are for:
@@ -47,6 +49,43 @@ generated parts are for:
   53 mm off; master mends most of that.
 - brepkit misreads cylinders written as Fusion writes them, and ignores units and
   placements.
+
+Every reader reads the three big parts right, at every tolerance.
+
+### Speed and memory
+
+On an Apple M2 Pro, against OpenCascade, on the runs both pass, averaged
+geometrically: 0.5× is twice as fast, or half the memory.
+
+| reader | runs both pass | time | CPU time | reading | meshing | peak memory | triangles |
+|---|---|---|---|---|---|---|---|
+| solidcraft | 92 | 0.69× | 1.1× | 1.0× | 0.93× | 0.79× | 1.4× |
+| ogeom | 87 | 0.30× | 0.55× | 0.63× | 0.25× | 0.41× | 1.3× |
+| truck, master | 91 | 0.36× | 0.46× | 0.31× | 0.31× | 0.61× | 0.63× |
+| truck, released | 82 | 0.38× | 0.49× | 0.30× | 0.34× | 0.60× | 0.69× |
+| brepkit | 50 | 0.23× | 0.27× | 0.038× | 0.51× | 0.28× | 0.86× |
+
+Every reader beats OpenCascade there, but most of those parts are small, and on a
+small part most of OpenCascade's time is starting up: 12 ms of its 15 on the
+cylinder. The big plate shows what the small parts cannot. At 0.0125 mm:
+
+| reader | `plate_100_holes` | `plate_900_holes` | growth | peak memory on `plate_900_holes` |
+|---|---|---|---|---|
+| OpenCascade | 346 ms | 13.5 s | 39× | 1146 MB |
+| solidcraft | 465 ms | 19.9 s | 43× | 733 MB |
+| ogeom | 94 ms | 477 ms | 5× | 217 MB |
+| truck, master | 126 ms | 5.89 s | 47× | 118 MB |
+| truck, released | 122 ms | 5.72 s | 47× | 111 MB |
+| brepkit | 67 ms | 2.75 s | 41× | 132 MB |
+
+- Every reader but ogeom takes about forty times as long on a part nine times the
+  size, nearly all of it meshing. ogeom takes five times as long, and meshes the 900
+  holes in a third of a second.
+- OpenCascade holds over a gigabyte for the plate, and spends 1.3 s reading the
+  1.4 MB file, which brepkit reads in 14 ms.
+- With 1600 holes, solidcraft took 57 s and OpenCascade 33 s, so the plate stops at
+  900: past 60 s a reader fails.
+- The grooved shaft's 753 faces take every reader under 0.7 s.
 
 ## How a reader is scored
 
@@ -69,6 +108,33 @@ Two limits to keep in mind. On the shop parts the reference is OpenCascade, not 
 true surface: a reader that is right where OpenCascade is wrong is scored as wrong
 there, so a failure on one of those is worth a look rather than taken on trust. And
 distances are measured at points, not everywhere between them.
+
+## How a reader is timed
+
+Only a run that passes is timed: a reader that gives up fast is not fast. Each one is
+run again, up to five times or for ten seconds in all, and the median taken of:
+
+- **time**, from starting the reader to its exit: everything a user would wait for,
+  starting the program and writing the mesh included.
+- **CPU time**, user and system, across all its threads. More CPU time than time
+  means the reader works in parallel.
+- **reading** and **meshing**, the reader's own account of them, for a reader that
+  gives one. Every reader here does; see [Adding a reader](#adding-a-reader).
+- **peak memory**, the most the reader held in RAM at once, as the operating system
+  reports it once the reader exits (on macOS and Linux).
+
+The readers are then compared with OpenCascade on the runs both pass: each figure is
+the reader's divided by OpenCascade's, averaged geometrically, so 0.5× is twice as
+fast, or half the memory. Most parts here are small, where starting the program is
+much of the time, so `plate_100_holes`, `plate_900_holes` and `grooved_shaft` are big
+on purpose. They show how a reader's time grows with a part, which a small part
+cannot. The triangle count is beside each, since a reader that makes fewer triangles
+has less to do.
+
+The figures are from one machine, so they compare readers with each other rather
+than promise a speed on yours. Readers run one at a time, but anything else running
+slows them, and unevenly: most of all a reader that meshes in parallel, as ogeom
+does. Time on an idle machine.
 
 ## Adding a reader
 
@@ -96,6 +162,16 @@ triangles, then face 1's, and so on. Every face appears, even one with no triang
 that is how a face given up on is caught. If the reader cannot read or mesh the file,
 it writes the reason to `OUT/<stem>.err` instead. Either way it exits with 0.
 
+A reader may also write how long it spent reading the file into its own model, and
+meshing that, to `OUT/<stem>.time`, one phase a line, in seconds:
+
+```text
+read 0.0421
+mesh 0.0034
+```
+
+It is optional; without it, a reader is timed from outside only.
+
 A reader that ignores the file's length unit is given the tolerance in that unit and
 writes in it; mark it `:file-units` in `run.sh`, and the runner scales it.
 
@@ -109,11 +185,13 @@ and parts generated to break readers in known ways.
 
 ### Generated parts
 
-[corpus/generated/](corpus/generated/) holds parts whose exact shape is known: each is
-one or more solids of revolution, a profile of segments and arcs turned about an
-axis, written as STEP in the dialect the test needs, beside a `.truth.json` giving
-that shape. The nearest point of such a surface lies in the half-plane through the
-axis and the point, so the runner measures them exactly.
+[corpus/generated/](corpus/generated/) holds parts whose exact shape is known, written
+as STEP in the dialect the test needs, beside a `.truth.json` giving that shape. Each
+is solids of revolution, a profile of segments and arcs turned about an axis, or a
+prism, a flat profile of segments and arcs, with holes, swept along one. The nearest
+point of a surface of revolution lies in the half-plane through the axis and the
+point, and the nearest point of a prism's wall lies over the nearest point of its
+profile, so the runner measures both exactly.
 [generate/](generate/) writes them, the same every run:
 
 ```sh
@@ -138,6 +216,12 @@ cargo run --manifest-path generate/Cargo.toml -- corpus/generated
 | `far_cylinder` | 100 m from the origin |
 | `cylinder_placed` | a component in an assembly, tipped over and moved |
 | `cylinder_twice` | a component used twice, once turned on its side |
+| `plate_100_holes` | a plate 100 mm square with 100 holes, its corners rounded: one solid of 110 faces |
+| `plate_900_holes` | the plate 300 mm square with 900 holes, like a router's spoilboard: 910 faces, two of them holding 900 holes each |
+| `grooved_shaft` | a shaft half a metre long ringed by 250 grooves: 753 faces, each wrapping all the way round |
+
+The last three are big, to time readers on, and are written with seam edges, as
+OpenCascade writes them, so that every reader here reads them.
 
 ### The freeform panel
 
@@ -180,7 +264,8 @@ SOLIDCRAFT_REV=07e263d TRUCK_REV=<sha> ./run.sh
 ```
 
 It needs Rust, git, cmake and a C++ compiler; OpenCascade is built from source the
-first time, which takes several minutes. Clones and builds go under `work/`.
+first time, which takes several minutes. Clones and builds go under `work/`. With
+everything built, a whole run takes about a quarter of an hour.
 
 ## Licence
 

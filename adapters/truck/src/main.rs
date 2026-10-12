@@ -3,11 +3,12 @@
 //!
 //!   truck-export OUT TOLERANCE FILE
 //!
-//! Writes `OUT/<stem>.bin` in the format the README describes, or `OUT/<stem>.err`.
-//! truck ignores the file's unit, so the tolerance is in that unit and so is the
+//! Writes `OUT/<stem>.bin` in the format the README describes, or `OUT/<stem>.err`,
+//! and how long reading and meshing took to `OUT/<stem>.time`. truck ignores the file's unit, so the tolerance is in that unit and so is the
 //! output; the runner scales it (`:file-units`).
 
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use truck_meshalgo::prelude::*;
 use truck_stepio::r#in::Table;
@@ -25,7 +26,8 @@ fn main() {
         .map_err(|e| e.to_string())
         .and_then(|tolerance| mesh(file, tolerance));
     let written = match result {
-        Ok(bin) => std::fs::write(out.join(format!("{stem}.bin")), bin),
+        Ok((bin, times)) => std::fs::write(out.join(format!("{stem}.time")), times)
+            .and_then(|()| std::fs::write(out.join(format!("{stem}.bin")), bin)),
         Err(why) => std::fs::write(out.join(format!("{stem}.err")), why),
     };
     if let Err(e) = written {
@@ -34,16 +36,23 @@ fn main() {
     }
 }
 
-fn mesh(file: &str, tolerance: f64) -> Result<Vec<u8>, String> {
+/// The mesh, encoded, and how long reading and meshing took.
+fn mesh(file: &str, tolerance: f64) -> Result<(Vec<u8>, String), String> {
+    let start = Instant::now();
     let text = std::fs::read_to_string(file).map_err(|e| e.to_string())?;
     let table = Table::from_step(&text).ok_or("truck-stepio could not parse the file")?;
-    let (mut vertices, mut triangles, mut faces) = (Vec::new(), Vec::new(), Vec::new());
-    let mut shells: Vec<_> = table.shell.iter().collect();
-    shells.sort_by_key(|(id, _)| **id);
-    for (id, shell) in shells {
+    let mut ids: Vec<_> = table.shell.keys().copied().collect();
+    ids.sort_unstable();
+    let mut shells = Vec::new();
+    for id in ids {
         let shell = table
-            .to_compressed_shell(shell)
+            .to_compressed_shell(&table.shell[&id])
             .map_err(|e| format!("shell #{id}: {e:?}"))?;
+        shells.push(shell);
+    }
+    let read = start.elapsed();
+    let (mut vertices, mut triangles, mut faces) = (Vec::new(), Vec::new(), Vec::new());
+    for shell in &shells {
         for face in &shell.robust_triangulation(tolerance).faces {
             let mut n = 0u64;
             if let Some(polygon) = &face.surface {
@@ -65,7 +74,13 @@ fn mesh(file: &str, tolerance: f64) -> Result<Vec<u8>, String> {
             faces.push(n);
         }
     }
-    Ok(encode(&vertices, &triangles, &faces))
+    let meshed = start.elapsed() - read;
+    Ok((encode(&vertices, &triangles, &faces), phases(read, meshed)))
+}
+
+/// `OUT/<stem>.time`: how long reading the file and meshing it took, in seconds.
+fn phases(read: Duration, mesh: Duration) -> String {
+    format!("read {}\nmesh {}\n", read.as_secs_f64(), mesh.as_secs_f64())
 }
 
 fn encode(vertices: &[[f64; 3]], triangles: &[[u32; 3]], faces: &[u64]) -> Vec<u8> {

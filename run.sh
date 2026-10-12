@@ -81,9 +81,10 @@ if [ $# -eq 0 ]; then
     for v in "${VERSIONS[@]}"; do echo "- $v"; done
     echo
     echo "Each cell: whether the reader passes, how far its mesh lies from the true surface"
-    echo "at worst, and how long it took. The true surface is the exact shape for the"
-    echo "generated parts, and OpenCascade's mesh at 0.001 mm for the rest. See the README"
-    echo "for how a reader is scored."
+    echo "at worst, and how long it took, the median of its repeats where it passes. The"
+    echo "true surface is the exact shape for the generated parts, and OpenCascade's mesh at"
+    echo "0.001 mm for the rest. See the README for how a reader is scored and timed. Speed"
+    echo "and memory follow the failures."
     echo
     echo "$TABLE"
   } > results/RESULTS.md

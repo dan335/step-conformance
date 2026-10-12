@@ -1,12 +1,13 @@
-//! Solids of revolution: a closed profile of segments and arcs, turned a full turn
-//! about an axis. The exact shape a generated part stands for, and what its
-//! `truth.json` records.
+//! Solids of revolution, a closed profile of segments and arcs turned a full turn
+//! about an axis, and prisms, a flat profile with holes swept straight along one.
+//! The exact shape a generated part stands for, and what its `truth.json` records.
 
 use glam::{DVec2, DVec3};
 use serde::Serialize;
 
-/// One piece of a profile, in the half-plane through the axis: `[z, r]`, how far
-/// along the axis and how far out from it, in millimetres.
+/// One piece of a profile, in millimetres. For a solid of revolution it lies in the
+/// half-plane through the axis, `[z, r]`: how far along the axis and how far out from
+/// it. For a prism it lies in the prism's plane, `[x, y]`.
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Element {
@@ -97,15 +98,36 @@ impl Solid {
     }
 }
 
+/// A prism: a flat profile swept along `axis` for `height`. The profile lies in the
+/// plane through `origin` square to `axis`, its `[x, y]` along `x` and `axis × x`.
+/// It is closed loops of pieces: the outside first, running counterclockwise seen
+/// from the far end of the axis, then the holes, running clockwise, so that the
+/// material is always on a loop's left.
+#[derive(Debug, Clone, Serialize)]
+pub struct Prism {
+    pub origin: [f64; 3],
+    pub axis: [f64; 3],
+    pub x: [f64; 3],
+    pub height: f64,
+    pub loops: Vec<Vec<Element>>,
+}
+
 /// What a generated part is, exactly: every solid in it, where the file puts it.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 pub struct Truth {
     pub solids: Vec<Solid>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub prisms: Vec<Prism>,
 }
 
 /// A straight piece from `(z, r)` to `(z, r)`.
 pub fn seg(from: [f64; 2], to: [f64; 2]) -> Element {
     Element::Segment { from, to }
+}
+
+/// A round hole in a prism's profile: a full circle about `[x, y]`, clockwise.
+pub fn hole(center: [f64; 2], radius: f64) -> Vec<Element> {
+    vec![arc(center, radius, 0.0, -360.0)]
 }
 
 /// An arc about `(z, r)`, from angle `start` through `sweep`, in degrees.

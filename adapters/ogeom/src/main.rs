@@ -7,7 +7,8 @@
 //!   ogeom-reader OUT TOLERANCE_MM FILE
 //!
 //! Writes `OUT/<stem>.bin` in the format the README describes, in millimetres, or why not
-//! to `OUT/<stem>.err`, and what the import reported to `OUT/<stem>.log`.
+//! to `OUT/<stem>.err`, what the import reported to `OUT/<stem>.log`, and how long
+//! reading and meshing took to `OUT/<stem>.time`.
 //!
 //! ogeom scales the file to millimetres as it reads it, and places every part of
 //! an assembly where the tree puts it. A face it will not mesh is written with no
@@ -15,6 +16,7 @@
 
 use std::collections::HashSet;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use ogeom_core::Tolerances;
 use ogeom_io::read_step;
@@ -36,10 +38,11 @@ fn main() {
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
-    let (bin, err, log) = (
+    let (bin, err, log, time) = (
         out.join(format!("{stem}.bin")),
         out.join(format!("{stem}.err")),
         out.join(format!("{stem}.log")),
+        out.join(format!("{stem}.time")),
     );
     // The trial reads the .err before the .bin, and stops altogether when it finds
     // neither, so one is there from the start: a reader that aborts or overflows its
@@ -62,7 +65,9 @@ fn main() {
     }));
     let _ = std::fs::write(&log, notes.join("\n"));
     let written = match result {
-        Ok(Ok(encoded)) => std::fs::write(&bin, encoded).and_then(|()| std::fs::remove_file(&err)),
+        Ok(Ok((encoded, times))) => std::fs::write(&time, times)
+            .and_then(|()| std::fs::write(&bin, encoded))
+            .and_then(|()| std::fs::remove_file(&err)),
         Ok(Err(why)) => std::fs::write(&err, why),
         Err(_) => Ok(()), // the hook has written the panic
     };
@@ -72,7 +77,9 @@ fn main() {
     }
 }
 
-fn mesh(file: &str, tolerance: f64, notes: &mut Vec<String>) -> Result<Vec<u8>, String> {
+/// The mesh, encoded, and how long reading and meshing took.
+fn mesh(file: &str, tolerance: f64, notes: &mut Vec<String>) -> Result<(Vec<u8>, String), String> {
+    let start = Instant::now();
     let bytes = std::fs::read(file).map_err(|e| e.to_string())?;
     let import = read_step(&String::from_utf8_lossy(&bytes), TOL).map_err(|e| e.to_string())?;
     let report = &import.report;
@@ -118,6 +125,7 @@ fn mesh(file: &str, tolerance: f64, notes: &mut Vec<String>) -> Result<Vec<u8>, 
         }
     }
 
+    let read = start.elapsed();
     let deflection = Deflection {
         chord: tolerance,
         ..Deflection::default()
@@ -146,7 +154,13 @@ fn mesh(file: &str, tolerance: f64, notes: &mut Vec<String>) -> Result<Vec<u8>, 
             soup.faces.push(mesh.triangles.len() as u64);
         }
     }
-    Ok(soup.encode())
+    let meshed = start.elapsed() - read;
+    Ok((soup.encode(), phases(read, meshed)))
+}
+
+/// `OUT/<stem>.time`: how long reading the file and meshing it took, in seconds.
+fn phases(read: Duration, mesh: Duration) -> String {
+    format!("read {}\nmesh {}\n", read.as_secs_f64(), mesh.as_secs_f64())
 }
 
 fn faces_of(model: &Model, shape: &Shape) -> Result<Vec<Shape>, String> {

@@ -6,7 +6,8 @@
 //!   truck-master-reader OUT TOLERANCE FILE
 //!
 //! Writes `OUT/<stem>.bin` in the format the README describes, or why not to
-//! `OUT/<stem>.err`, and what it chose along the way to `OUT/<stem>.log`.
+//! `OUT/<stem>.err`, what it chose along the way to `OUT/<stem>.log`, and how long
+//! reading and meshing took to `OUT/<stem>.time`.
 //!
 //! Master still ignores the file's unit, so the tolerance is in that unit and so
 //! is the output; run it with `:file-units`.
@@ -21,6 +22,7 @@
 //! unplaced.
 
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use truck_meshalgo::prelude::*;
 use truck_stepio::r#in::Table;
@@ -39,10 +41,11 @@ fn main() {
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
-    let (bin, err, log) = (
+    let (bin, err, log, time) = (
         out.join(format!("{stem}.bin")),
         out.join(format!("{stem}.err")),
         out.join(format!("{stem}.log")),
+        out.join(format!("{stem}.time")),
     );
     // The trial reads the .err before the .bin, and stops altogether when it finds
     // neither, so one is there from the start: a reader that aborts or overflows its
@@ -65,7 +68,9 @@ fn main() {
     }));
     let _ = std::fs::write(&log, notes.join("\n"));
     let written = match result {
-        Ok(Ok(encoded)) => std::fs::write(&bin, encoded).and_then(|()| std::fs::remove_file(&err)),
+        Ok(Ok((encoded, times))) => std::fs::write(&time, times)
+            .and_then(|()| std::fs::write(&bin, encoded))
+            .and_then(|()| std::fs::remove_file(&err)),
         Ok(Err(why)) => std::fs::write(&err, why),
         Err(_) => Ok(()), // the hook has written the panic
     };
@@ -78,7 +83,9 @@ fn main() {
 /// A shell ready to mesh, and the placement that takes it into the file's frame.
 type Placed = (CompressedShell<Point3, Curve3D, Surface>, Matrix4);
 
-fn mesh(file: &str, tolerance: f64, notes: &mut Vec<String>) -> Result<Vec<u8>, String> {
+/// The mesh, encoded, and how long reading and meshing took.
+fn mesh(file: &str, tolerance: f64, notes: &mut Vec<String>) -> Result<(Vec<u8>, String), String> {
+    let start = Instant::now();
     let text = std::fs::read_to_string(file).map_err(|e| e.to_string())?;
     let table = Table::from_step(&text).ok_or("truck-stepio could not parse the file")?;
 
@@ -118,6 +125,7 @@ fn mesh(file: &str, tolerance: f64, notes: &mut Vec<String>) -> Result<Vec<u8>, 
         }
     };
 
+    let read = start.elapsed();
     let mut mesh = Soup::default();
     for (shell, matrix) in &shells {
         // A placement that mirrors turns every triangle inside out.
@@ -145,7 +153,13 @@ fn mesh(file: &str, tolerance: f64, notes: &mut Vec<String>) -> Result<Vec<u8>, 
             mesh.faces.push(n);
         }
     }
-    Ok(mesh.encode())
+    let meshed = start.elapsed() - read;
+    Ok((mesh.encode(), phases(read, meshed)))
+}
+
+/// `OUT/<stem>.time`: how long reading the file and meshing it took, in seconds.
+fn phases(read: Duration, mesh: Duration) -> String {
+    format!("read {}\nmesh {}\n", read.as_secs_f64(), mesh.as_secs_f64())
 }
 
 /// Every shell the product tree reaches, once per path to it, with the product of

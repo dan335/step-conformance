@@ -1,10 +1,11 @@
-//! Writing solids of revolution as STEP (AP214), in the dialect a test asks for.
+//! Writing solids of revolution and prisms as STEP (AP214), in the dialect a test
+//! asks for.
 
 use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2, SQRT_2, TAU};
 
 use glam::{DVec2, DVec3};
 
-use crate::shape::{Element, Solid};
+use crate::shape::{Element, Prism, Solid};
 
 /// How a solid's faces and edges are written.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -133,14 +134,18 @@ impl Step {
         (pd, pds)
     }
 
-    /// A single part: one product whose shape is `solids`, as one B-rep each.
-    pub fn part(&mut self, name: &str, unit: Unit, solids: &[(Solid, Style)]) {
+    /// A single part: one product whose shape is `solids` and `prisms`, as one B-rep
+    /// each.
+    pub fn part(&mut self, name: &str, unit: Unit, solids: &[(Solid, Style)], prisms: &[(Prism, Style)]) {
         let ctx = self.context(unit);
         let (_, pds) = self.product(name);
         let origin = self.placement(DVec3::ZERO, DVec3::Z, DVec3::X);
         let mut items = vec![origin];
         for (solid, style) in solids {
             items.push(self.solid(solid, *style));
+        }
+        for (prism, style) in prisms {
+            items.push(self.prism(prism, *style));
         }
         let rep = self.add(format!(
             "ADVANCED_BREP_SHAPE_REPRESENTATION('',({}),#{ctx})",
@@ -226,9 +231,6 @@ impl Step {
 
             // The circle where a face starts runs counterclockwise about the axis,
             // the one where it ends clockwise; see the README.
-            let oriented = |s: &mut Self, e: u64, sense: bool| {
-                s.add(format!("ORIENTED_EDGE('',*,*,#{e},{})", if sense { ".T." } else { ".F." }))
-            };
             let mut bounds = Vec::new();
             let seam = style == Style::Seam && matches!(el, Element::Segment { .. });
             match (start, end) {
@@ -237,10 +239,10 @@ impl Step {
                     let line = self.line(sp, ep);
                     let seam = self.add(format!("EDGE_CURVE('',#{sv},#{ev},#{line},.T.)"));
                     let loop_edges = [
-                        oriented(self, se, true),
-                        oriented(self, seam, true),
-                        oriented(self, ee, false),
-                        oriented(self, seam, false),
+                        self.oriented(se, true),
+                        self.oriented(seam, true),
+                        self.oriented(ee, false),
+                        self.oriented(seam, false),
                     ];
                     let l = self.add(format!("EDGE_LOOP('',({}))", refs(&loop_edges)));
                     bounds.push(self.add(format!("FACE_OUTER_BOUND('',#{l},.T.)")));
@@ -249,11 +251,11 @@ impl Step {
                     // A plane's outer bound is its larger circle.
                     let mut loops: Vec<(u64, f64)> = Vec::new();
                     if let Some((e, _, zr)) = start {
-                        let oe = oriented(self, e, true);
+                        let oe = self.oriented(e, true);
                         loops.push((self.add(format!("EDGE_LOOP('',(#{oe}))")), zr.y));
                     }
                     if let Some((e, _, zr)) = end {
-                        let oe = oriented(self, e, false);
+                        let oe = self.oriented(e, false);
                         loops.push((self.add(format!("EDGE_LOOP('',(#{oe}))")), zr.y));
                     }
                     // A curved face that pinches to a point on the axis: mark it. A
@@ -280,6 +282,150 @@ impl Step {
         }
         let shell = self.add(format!("CLOSED_SHELL('',({}))", refs(&faces)));
         self.add(format!("MANIFOLD_SOLID_BREP('',#{shell})"))
+    }
+
+    /// A prism as a closed shell: a cap at each end, and a wall for every piece of
+    /// every loop. A wall that wraps all the way round, a round hole, is bounded by
+    /// its two circles alone, or with a seam edge as well in `Style::Seam`. Prisms are
+    /// written in those two styles only.
+    fn prism(&mut self, p: &Prism, style: Style) -> u64 {
+        assert!(
+            matches!(style, Style::Analytic | Style::Seam),
+            "a prism is written plainly or with seams"
+        );
+        let a = DVec3::from(p.axis).normalize();
+        let x = DVec3::from(p.x).normalize();
+        let f = Frame { o: DVec3::from(p.origin), a, x, y: a.cross(x) };
+        let h = p.height;
+
+        let mut faces = Vec::new();
+        // Every loop's edges round the bottom and round the top, in the loop's order.
+        let mut rims = Vec::new();
+        for pieces in &p.loops {
+            let n = pieces.len();
+            // A vertex at every joint, below and above: joint i is where piece i starts.
+            let mut joints = Vec::with_capacity(n);
+            for el in pieces {
+                let q = el.at(0.0);
+                let (below, above) = (self.point(f.at(q, 0.0)), self.point(f.at(q, h)));
+                joints.push((
+                    self.add(format!("VERTEX_POINT('',#{below})")),
+                    self.add(format!("VERTEX_POINT('',#{above})")),
+                ));
+            }
+            // An edge up from every joint, but none up a round hole written plainly.
+            let mut ups = Vec::with_capacity(n);
+            for (el, &(below, above)) in pieces.iter().zip(&joints) {
+                if n == 1 && style == Style::Analytic {
+                    ups.push(None);
+                    continue;
+                }
+                let q = el.at(0.0);
+                let line = self.line(f.at(q, 0.0), f.at(q, h));
+                ups.push(Some(self.add(format!("EDGE_CURVE('',#{below},#{above},#{line},.T.)"))));
+            }
+            // Every piece's edge along the bottom and along the top, from its joint to
+            // the next.
+            let (mut bottom, mut top) = (Vec::with_capacity(n), Vec::with_capacity(n));
+            for (i, el) in pieces.iter().enumerate() {
+                let (start, end) = (joints[i], joints[(i + 1) % n]);
+                bottom.push(self.prism_edge(el, &f, 0.0, start.0, end.0));
+                top.push(self.prism_edge(el, &f, h, start.1, end.1));
+            }
+            // The walls, bounded counterclockwise seen from outside: along the bottom,
+            // up, back along the top, and down.
+            for (i, el) in pieces.iter().enumerate() {
+                let (surface, same) = self.prism_wall(el, &f);
+                let mut bounds = Vec::new();
+                match (ups[i], ups[(i + 1) % n]) {
+                    (Some(down), Some(up)) => {
+                        let edges = [
+                            self.oriented(bottom[i], true),
+                            self.oriented(up, true),
+                            self.oriented(top[i], false),
+                            self.oriented(down, false),
+                        ];
+                        let l = self.add(format!("EDGE_LOOP('',({}))", refs(&edges)));
+                        bounds.push(self.add(format!("FACE_OUTER_BOUND('',#{l},.T.)")));
+                    }
+                    _ => {
+                        let (b, t) = (self.oriented(bottom[i], true), self.oriented(top[i], false));
+                        let lb = self.add(format!("EDGE_LOOP('',(#{b}))"));
+                        let lt = self.add(format!("EDGE_LOOP('',(#{t}))"));
+                        bounds.push(self.add(format!("FACE_OUTER_BOUND('',#{lb},.T.)")));
+                        bounds.push(self.add(format!("FACE_BOUND('',#{lt},.T.)")));
+                    }
+                }
+                let same = if same { ".T." } else { ".F." };
+                faces.push(self.add(format!("ADVANCED_FACE('',({}),#{surface},{same})", refs(&bounds))));
+            }
+            rims.push((bottom, top));
+        }
+        // The caps. The top looks along the axis, so its loops run as the profile's
+        // do; the bottom looks back down it, so its loops run backwards.
+        for (w, up) in [(0.0, false), (h, true)] {
+            let at = self.placement(f.at(DVec2::ZERO, w), a, x);
+            let plane = self.add(format!("PLANE('',#{at})"));
+            let mut bounds = Vec::new();
+            for (k, (bottom, top)) in rims.iter().enumerate() {
+                let edges: Vec<u64> = if up {
+                    top.iter().map(|&e| self.oriented(e, true)).collect()
+                } else {
+                    bottom.iter().rev().map(|&e| self.oriented(e, false)).collect()
+                };
+                let l = self.add(format!("EDGE_LOOP('',({}))", refs(&edges)));
+                let kind = if k == 0 { "FACE_OUTER_BOUND" } else { "FACE_BOUND" };
+                bounds.push(self.add(format!("{kind}('',#{l},.T.)")));
+            }
+            let same = if up { ".T." } else { ".F." };
+            faces.push(self.add(format!("ADVANCED_FACE('',({}),#{plane},{same})", refs(&bounds))));
+        }
+        let shell = self.add(format!("CLOSED_SHELL('',({}))", refs(&faces)));
+        self.add(format!("MANIFOLD_SOLID_BREP('',#{shell})"))
+    }
+
+    /// A piece of a prism's profile as an edge `w` along the axis, from vertex `from`
+    /// to vertex `to`.
+    fn prism_edge(&mut self, el: &Element, f: &Frame, w: f64, from: u64, to: u64) -> u64 {
+        match *el {
+            Element::Segment { from: p, to: q } => {
+                let line = self.line(f.at(p.into(), w), f.at(q.into(), w));
+                self.add(format!("EDGE_CURVE('',#{from},#{to},#{line},.T.)"))
+            }
+            Element::Arc { center, radius, start, sweep } => {
+                // The circle runs counterclockwise about the axis from where the arc
+                // starts; a clockwise arc runs against it.
+                let at = self.placement(f.at(center.into(), w), f.a, f.dir(DVec2::from_angle(start)));
+                let r = self.length(radius);
+                let circle = self.add(format!("CIRCLE('',#{at},{r})"));
+                let same = if sweep > 0.0 { ".T." } else { ".F." };
+                self.add(format!("EDGE_CURVE('',#{from},#{to},#{circle},{same})"))
+            }
+        }
+    }
+
+    /// The wall a piece of a prism's profile sweeps, and whether its own normal points
+    /// out of the material, which lies on the piece's left.
+    fn prism_wall(&mut self, el: &Element, f: &Frame) -> (u64, bool) {
+        match *el {
+            Element::Segment { from, to } => {
+                let along = DVec2::from(to) - DVec2::from(from);
+                let out = DVec2::new(along.y, -along.x);
+                let at = self.placement(f.at(from.into(), 0.0), f.dir(out), f.dir(along));
+                (self.add(format!("PLANE('',#{at})")), true)
+            }
+            Element::Arc { center, radius, start, sweep } => {
+                let at = self.placement(f.at(center.into(), 0.0), f.a, f.dir(DVec2::from_angle(start)));
+                let r = self.length(radius);
+                // A cylinder's normal points away from its axis, which is out of the
+                // material where the arc runs counterclockwise.
+                (self.add(format!("CYLINDRICAL_SURFACE('',#{at},{r})")), sweep > 0.0)
+            }
+        }
+    }
+
+    fn oriented(&mut self, edge: u64, sense: bool) -> u64 {
+        self.add(format!("ORIENTED_EDGE('',*,*,#{edge},{})", if sense { ".T." } else { ".F." }))
     }
 
     fn line(&mut self, from: DVec3, to: DVec3) -> u64 {
@@ -435,6 +581,26 @@ impl Step {
             reals(&knots),
             rw.iter().map(|w| real(*w)).collect::<Vec<_>>().join(",")
         ))
+    }
+}
+
+/// A prism's frame: the plane of its profile, and the axis it is swept along.
+struct Frame {
+    o: DVec3,
+    a: DVec3,
+    x: DVec3,
+    y: DVec3,
+}
+
+impl Frame {
+    /// The profile's point `q`, `w` along the axis.
+    fn at(&self, q: DVec2, w: f64) -> DVec3 {
+        self.o + q.x * self.x + q.y * self.y + w * self.a
+    }
+
+    /// The direction `d` in the profile's plane.
+    fn dir(&self, d: DVec2) -> DVec3 {
+        d.x * self.x + d.y * self.y
     }
 }
 

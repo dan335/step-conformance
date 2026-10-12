@@ -10,7 +10,8 @@
 //!   brepkit-reader OUT TOLERANCE FILE
 //!
 //! Writes `OUT/<stem>.bin` in the format the README describes, or why not to
-//! `OUT/<stem>.err`, and what brepkit logged as a warning to `OUT/<stem>.log`.
+//! `OUT/<stem>.err`, what brepkit logged as a warning to `OUT/<stem>.log`, and how
+//! long reading and meshing took to `OUT/<stem>.time`.
 //!
 //! brepkit's reader ignores the file's unit, so the tolerance is in that unit and
 //! so is the output; run it with `:file-units`. It reads `MANIFOLD_SOLID_BREP`
@@ -21,6 +22,7 @@
 
 use std::path::Path;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use brepkit_io::step::read_step;
 use brepkit_math::chord::DEFAULT_ANGULAR_TOL;
@@ -38,10 +40,11 @@ fn main() {
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
-    let (bin, err, log) = (
+    let (bin, err, log, time) = (
         out.join(format!("{stem}.bin")),
         out.join(format!("{stem}.err")),
         out.join(format!("{stem}.log")),
+        out.join(format!("{stem}.time")),
     );
     let _ = log::set_logger(&WARNINGS);
     log::set_max_level(log::LevelFilter::Warn);
@@ -66,7 +69,9 @@ fn main() {
     let warnings = WARNINGS.0.lock().map(|w| w.join("\n")).unwrap_or_default();
     let _ = std::fs::write(&log, warnings);
     let written = match result {
-        Ok(Ok(encoded)) => std::fs::write(&bin, encoded).and_then(|()| std::fs::remove_file(&err)),
+        Ok(Ok((encoded, times))) => std::fs::write(&time, times)
+            .and_then(|()| std::fs::write(&bin, encoded))
+            .and_then(|()| std::fs::remove_file(&err)),
         Ok(Err(why)) => std::fs::write(&err, why),
         Err(_) => Ok(()), // the hook has written the panic
     };
@@ -76,7 +81,9 @@ fn main() {
     }
 }
 
-fn mesh(file: &str, tolerance: f64) -> Result<Vec<u8>, String> {
+/// The mesh, encoded, and how long reading and meshing took.
+fn mesh(file: &str, tolerance: f64) -> Result<(Vec<u8>, String), String> {
+    let start = Instant::now();
     let bytes = std::fs::read(file).map_err(|e| e.to_string())?;
     let mut topo = Topology::new();
     let solids =
@@ -87,6 +94,7 @@ fn mesh(file: &str, tolerance: f64) -> Result<Vec<u8>, String> {
                 .into(),
         );
     }
+    let read = start.elapsed();
     let mut soup = Soup::default();
     for (i, &solid) in solids.iter().enumerate() {
         // `offsets[f]` is where face f's corners start in `mesh.indices`, one per
@@ -106,7 +114,13 @@ fn mesh(file: &str, tolerance: f64) -> Result<Vec<u8>, String> {
         soup.faces
             .extend(offsets.windows(2).map(|w| u64::from((w[1] - w[0]) / 3)));
     }
-    Ok(soup.encode())
+    let meshed = start.elapsed() - read;
+    Ok((soup.encode(), phases(read, meshed)))
+}
+
+/// `OUT/<stem>.time`: how long reading the file and meshing it took, in seconds.
+fn phases(read: Duration, mesh: Duration) -> String {
+    format!("read {}\nmesh {}\n", read.as_secs_f64(), mesh.as_secs_f64())
 }
 
 /// Every warning brepkit logs, kept for the .log file.
