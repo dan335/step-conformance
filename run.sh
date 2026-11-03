@@ -51,11 +51,11 @@ build brepkit adapters/brepkit/Cargo.toml "$W/target/brepkit"
 VERSIONS+=("brepkit: $(grep -m1 -oE '"=[0-9.]+"' adapters/brepkit/Cargo.toml | tr -d '"=') (crates.io)")
 
 # solidcraft: its own STEP reader, built inside a checkout.
-REV=$(clone https://github.com/bherbruck/solidcraft.git "$W/solidcraft" "$SOLIDCRAFT_REV")
+REV=$(clone https://github.com/tangency-labs/solidcraft.git "$W/solidcraft" "$SOLIDCRAFT_REV")
 mkdir -p "$W/solidcraft/crates/kernel/examples"
 cp adapters/solidcraft/camcraft_export.rs "$W/solidcraft/crates/kernel/examples/camcraft_export.rs"
 echo "building solidcraft" >&2
-(cd "$W/solidcraft" && cargo build --quiet --release -p solvecraft-kernel --example camcraft_export)
+(cd "$W/solidcraft" && cargo build --quiet --release -p solidcraft-kernel --example camcraft_export)
 VERSIONS+=("solidcraft: $REV")
 
 READERS=(
